@@ -1,0 +1,424 @@
+{
+   "ClusterParameterGroup": {
+      "Type": "AWS::RDS::DBClusterParameterGroup",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "Description": "Cluster parameter group for SDb database",
+        "Family": "aurora-postgresql15",
+        "Parameters": {
+          "log_connections": "1",
+          "log_disconnections": "1",
+          "log_statement": "none",
+          "log_duration": "0",
+          "log_min_duration_statement": "100",
+          "log_hostname": "0",
+          "shared_preload_libraries": "pg_stat_statements, auto_explain",
+          "pg_stat_statements.track": "ALL",
+          "track_activity_query_size": "2048",
+          "auto_explain.log_analyze": "1",
+          "auto_explain.log_min_duration": "500"
+        },
+        "Tags": [
+          {
+            "Key": "component",
+            "Value": "imet_enhance_subsession_api"
+          },
+          {
+            "Key": "Name",
+            "Value": "SDbClusterParameterGroup"
+          }
+        ]
+      }
+    },
+    "SDbCluster": {
+      "Type": "AWS::RDS::DBCluster",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "Engine": "aurora-postgresql",
+        "EngineVersion": "15.5",
+        "DBClusterIdentifier": "s-db-cluster",
+        "DatabaseName": {
+          "Ref": "DatabaseName"
+        },
+        "MasterUsername": {
+          "Ref": "MasterUsername"
+        },
+        "MasterUserPassword": "{{resolve:secretsmanager:ISG/Enhance/SDbCredentials:SecretString:password}}",
+        "DBSubnetGroupName": {
+          "Ref": "DbSubnetGroup"
+        },
+        "VpcSecurityGroupIds": {
+          "Ref": "VPCSecurityGroups"
+        },
+        "DBClusterParameterGroupName": {
+          "Ref": "ClusterParameterGroup"
+        },
+        "StorageEncrypted": true,
+        "KmsKeyId": {
+          "Ref": "KmsArn"
+        },
+        "BackupRetentionPeriod": {
+          "Ref": "BackupRetentionPeriod"
+        },
+        "Tags": [
+          {
+            "Key": "component",
+            "Value": "imet_enhance_subsession_api"
+          },
+          {
+            "Key": "Name",
+            "Value": "SDbCluster"
+          }
+        ]
+      }
+    },
+    "PrimarySDbInstance": {
+      "Type": "AWS::RDS::DBInstance",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "Engine": "aurora-postgresql",
+        "DBInstanceIdentifier": "SDb1",
+        "PubliclyAccessible": false,
+        "CACertificateIdentifier": "rds-ca-rsa2048-g1",
+        "DBInstanceClass": {
+          "Ref": "RdsInstanceType"
+        },
+        "DBClusterIdentifier": {
+          "Ref":"SDbCluster"
+        },
+        "DBSubnetGroupName": {
+          "Ref": "DbSubnetGroup"
+        },
+        "Tags": [
+          {
+            "Key": "component",
+            "Value": "imet_enhance_subsession_api"
+          },
+          {
+            "Key": "Name",
+            "Value": "PrimaryDbInstance"
+          }
+        ]
+      }
+    },
+    "SecondarySDbInstance": {
+      "Type": "AWS::RDS::DBInstance",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "Engine": "aurora-postgresql",
+        "DBInstanceIdentifier": "SDb2",
+        "PubliclyAccessible": false,
+        "CACertificateIdentifier": "rds-ca-rsa2048-g1",
+        "DBInstanceClass": {
+          "Ref": "RdsInstanceType"
+        },
+        "DBClusterIdentifier": {
+          "Ref":"SDbCluster"
+        },
+        "DBSubnetGroupName": {
+          "Ref": "DbSubnetGroup"
+        },
+        "Tags": [
+          {
+            "Key": "component",
+            "Value": "imet_enhance_subsession_api"
+          },
+          {
+            "Key": "Name",
+            "Value": "SecondaryDbInstance"
+          }
+        ]
+      }
+    }
+
+
+	
+	"Route53Record": {
+	  "Type": "AWS::Route53::RecordSet",
+	  "DeletionPolicy": "Retain",
+	  "Properties": {
+		"HostedZoneId": {
+		  "Ref": "DnsZone"
+		},
+		"TTL": "300",
+		"Type": "CNAME",
+		"Name": {
+		  "Ref": "CName"
+		},
+		"ResourceRecords": [
+		  {
+			"Fn::GetAtt": [
+			  "SDbCluster",
+			  "Endpoint.Address"
+			]
+		  }
+		]
+	  }
+	},
+  "EventSubscriptionForCluster": {
+    "Type": "AWS::RDS::EventSubscription",
+    "Properties": {
+      "Enabled": true,
+      "SourceIds": [
+        { "Ref": "SDbCluster" }
+      ],
+      "EventCategories": [
+        "availability",
+        "deletion",
+        "failure",
+        "low storage"
+      ],
+      "SourceType": "db-cluster",
+      "SnsTopicArn": { "Ref": "TopicArn" }
+    }
+  },
+  "SDbMessagesPublishedAlarmCluster": {
+    "Type": "AWS::CloudWatch::Alarm",
+    "Properties": {
+      "AlarmActions": [
+        { "Ref": "SnsTopic" }
+      ],
+      "AlarmDescription": "Alarm for published messages to DB SNS Topic (Cluster)",
+      "AlarmName": "SDbMessagesPublishedAlarmCluster",
+      "ComparisonOperator": "GreaterThanThreshold",
+      "Dimensions": [
+        {
+          "Name": "DBClusterIdentifier",
+          "Value": "s-db-cluster"
+        }
+      ],
+      "EvaluationPeriods": 1,
+      "MetricName": "NumberOfMessagesPublished",
+      "Namespace": "AWS/SNS",
+      "OKActions": [
+        { "Ref": "SnsTopic" }
+      ],
+      "Period": 300,
+      "Statistic": "Sum",
+      "Threshold": 0,
+      "Unit": "Count",
+      "TreatMissingData": "notBreaching"
+    }
+  },
+  "SDbHighCpuAlarmCluster": {
+    "Type": "AWS::CloudWatch::Alarm",
+    "Properties": {
+      "AlarmActions": [
+        { "Ref": "SnsTopic" }
+      ],
+      "AlarmDescription": "Alarm for high CPU utilization on DB Cluster",
+      "AlarmName": "SDbHighCpuAlarmCluster",
+      "ComparisonOperator": "GreaterThanThreshold",
+      "EvaluationPeriods": 1,
+      "Namespace": "AWS/RDS",
+      "MetricName": "CPUUtilization",
+      "Dimensions": [
+        {
+          "Name": "DBClusterIdentifier",
+          "Value": "s-db-cluster"
+        }
+      ],
+      "OKActions": [
+        { "Ref": "SnsTopic" }
+      ],
+      "Period": 28800,
+      "Statistic": "Average",
+      "Threshold": 80,
+      "Unit": "Percent",
+      "TreatMissingData": "breaching"
+    }
+  },
+  "SDbConnectionsAlarmCluster": {
+    "Type": "AWS::CloudWatch::Alarm",
+    "Properties": {
+      "AlarmActions": [
+        { "Ref": "EmailOnlySnsTopic" }
+      ],
+      "AlarmDescription": "Alarm for database connections on DB Cluster",
+      "AlarmName": "SDbConnectionsAlarmCluster",
+      "ComparisonOperator": "GreaterThanThreshold",
+      "EvaluationPeriods": 1,
+      "Namespace": "AWS/RDS",
+      "MetricName": "DatabaseConnections",
+      "Dimensions": [
+        {
+          "Name": "DBClusterIdentifier",
+          "Value": "s-db-cluster"
+        }
+      ],
+      "OKActions": [
+        { "Ref": "EmailOnlySnsTopic" }
+      ],
+      "Period": 300,
+      "Statistic": "Average",
+      "Threshold": 2500,
+      "Unit": "Count",
+      "TreatMissingData": "breaching"
+    }
+  },
+  "SDbFreeStorageSpaceAlarm200gCluster": {
+    "Type": "AWS::CloudWatch::Alarm",
+    "Properties": {
+      "AlarmActions": [
+        { "Ref": "EmailOnlySnsTopic" }
+      ],
+      "AlarmDescription": "Alarm for free storage space on DB Cluster",
+      "AlarmName": "SDbFreeStorageSpaceAlarm200gCluster",
+      "ComparisonOperator": "LessThanThreshold",
+      "EvaluationPeriods": 1,
+      "Namespace": "AWS/RDS",
+      "MetricName": "FreeStorageSpace",
+      "Dimensions": [
+        {
+          "Name": "DBClusterIdentifier",
+          "Value": "s-db-cluster"
+        }
+      ],
+      "OKActions": [
+        { "Ref": "EmailOnlySnsTopic" }
+      ],
+      "Period": 300,
+      "Statistic": "Average",
+      "Threshold": 214748364800,
+      "Unit": "Bytes"
+    }
+  },
+  "SDbFreeStorageSpaceAlarm100gCluster": {
+    "Type": "AWS::CloudWatch::Alarm",
+    "Properties": {
+      "AlarmActions": [
+        { "Ref": "SnsTopic" }
+      ],
+      "AlarmDescription": "Alarm for free storage space on DB Cluster",
+      "AlarmName": "SDbFreeStorageSpaceAlarm100gCluster",
+      "ComparisonOperator": "LessThanThreshold",
+      "EvaluationPeriods": 1,
+      "Namespace": "AWS/RDS",
+      "MetricName": "FreeStorageSpace",
+      "Dimensions": [
+        {
+          "Name": "DBClusterIdentifier",
+          "Value": "s-db-cluster"
+        }
+      ],
+      "OKActions": [
+        { "Ref": "SnsTopic" }
+      ],
+      "Period": 300,
+      "Statistic": "Average",
+      "Threshold": 107374182400,
+      "Unit": "Bytes"
+    }
+  }
+}
+==========
+properties.json
+
+
+[
+  {
+    "ParameterKey": "MasterUsername",
+    "ParameterValue": "sdb"
+  },
+  {
+    "ParameterKey": "DatabaseName",
+    "ParameterValue": "Projectsdb"
+  },
+  {
+    "ParameterKey": "DBSubnetGroups",
+    "ParameterValue": "subnet-98770ed,subnet-d89797c"
+  },
+  {
+    "ParameterKey": "VPCSecurityGroups",
+    "ParameterValue": "sg-9c979874"
+  },
+  {
+    "ParameterKey": "DnsZone",
+    "ParameterValue": "Z567583CJ"
+  },
+  {
+    "ParameterKey": "CName",
+    "ParameterValue": "s-api-rds.qual.cloud.com."
+  },
+  {
+    "ParameterKey": "KmsArn",
+    "ParameterValue": "arn:aws:kms:us-east-1:686:key/6876-1947-4139-b146-6786"
+  },
+  {
+	"ParameterKey": "StorageType",
+    "ParameterValue": "io1"
+  },
+  {
+    "ParameterKey": "StorageSize",
+    "ParameterValue": "500"
+  },
+  {
+    "ParameterKey": "MaxStorageSize",
+    "ParameterValue": "1000"
+  },
+  {
+    "ParameterKey": "Iops",
+    "ParameterValue": "800"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "db.m6g.large"
+  },
+  {
+    "ParameterKey": "RdsInstanceType",
+    "ParameterValue": "db.r5.large"
+  },
+  {
+    "ParameterKey": "EnvTopicName",
+    "ParameterValue": "sdbTopic-qual"
+  },
+  {
+    "ParameterKey":"BucketName",
+    "ParameterValue":"qual-Project-s"
+  },
+  {
+    "ParameterKey":"HistoricBucketName",
+    "ParameterValue":"qual-Project-s-historic"
+  },
+  {
+    "ParameterKey": "MonitoringRoleArn",
+    "ParameterValue": "arn:aws:iam::467366476476:role/rds-monitoring-role"
+  },
+  {
+    "ParameterKey": "MultiAZ",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "BackupRetentionPeriod",
+    "ParameterValue": "3"
+  },
+  {
+    "ParameterKey": "MonitoringInterval",
+    "ParameterValue": "60"
+  },
+  {
+    "ParameterKey": "EnvTopicArn",
+    "ParameterValue": "arn:aws:sns:us-east-1:467366476476:sdbTopic-qual"
+  },
+  {
+    "ParameterKey": "xMattersSnsTopic",
+    "ParameterValue": "arn:aws:sns:us-east-1:467366476476:qual-Project-black-hole-topic"
+  },
+  {
+    "ParameterKey": "EmailOnlySnsTopic",
+    "ParameterValue": "arn:aws:sns:us-east-1:467366476476:ProjectSnsTopic"
+  },
+  {
+    "ParameterKey": "AlarmCI",
+    "ParameterValue": "vpn.Project_s_api.rds"
+  },
+  {
+    "ParameterKey": "WorkDataImagesBillingBuilderRoleARN",
+    "ParameterValue": "arn:aws:iam::836408430049:role/system-roles/transform-product-team/tile-generator/transform-billing-builder-role"
+  },
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "qual"
+  }
+]
+================
